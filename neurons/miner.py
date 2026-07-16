@@ -44,6 +44,7 @@ class Miner(BaseMinerNeuron):
                 repo_root / "poker44_ml" / "inference.py",
                 repo_root / "poker44_ml" / "combined.py",
                 repo_root / "poker44_ml" / "features.py",
+                repo_root / "poker44_ml" / "features_creative.py",
                 repo_root / "poker44_ml" / "features_leader.py",
             ],
             defaults={
@@ -56,7 +57,7 @@ class Miner(BaseMinerNeuron):
                     "127/08_submission local joblib ensemble. "
                     f"Artifact version={metadata.get('version', '2')}; "
                     f"strategy={metadata.get('strategy', 'unspecified')}; "
-                    f"Safety mode={SAFETY_MODE}; feature_set={metadata.get('feature_set', 'combined312')}; "
+                    f"Safety mode={SAFETY_MODE}; "
                     f"models={len(self.model.models)}; features={len(self.model.feature_names)}."
                 ),
                 "open_source": True,

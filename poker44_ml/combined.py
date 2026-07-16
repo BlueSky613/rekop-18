@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from poker44_ml.features_leader import chunk_features as _leader_features
 from poker44_ml.features import chunk_features as _our_features
+from poker44_ml.features_creative import creative_features as _creative_features
 
 _HONEST_PREFIXES = ("rand_", "potodds_", "state_", "grid_", "simil_")
 
@@ -20,4 +21,5 @@ def chunk_features(chunk):
     for k, v in ours.items():                         # + only the honest signals
         if k.startswith(_HONEST_PREFIXES):
             f[k] = v
+    f.update(_creative_features(chunk))
     return f

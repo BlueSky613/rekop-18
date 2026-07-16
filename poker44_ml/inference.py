@@ -75,6 +75,8 @@ class Poker44Model:
             return probabilities
 
         k = max(1, int(math.floor(0.10 * n)))
+        if n >= 8:
+            k = max(k, 2)
         order = np.argsort(-probabilities, kind="mergesort")
         if mode == "band":
             positive_hi, positive_lo, negative_hi, negative_lo = 0.509, 0.501, 0.490, 0.010
