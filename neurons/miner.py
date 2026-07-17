@@ -36,6 +36,8 @@ class Miner(BaseMinerNeuron):
         self.request_log_path = self._resolve_request_log_path(repo_root)
         self.model = self._load_submission_model(self.model_path)
         metadata = dict(getattr(self.model, "metadata", {}) or {})
+        model_name = self._model_name(metadata)
+        model_version = self._model_version(metadata)
 
         self.model_manifest = build_local_model_manifest(
             repo_root=repo_root,
@@ -48,15 +50,15 @@ class Miner(BaseMinerNeuron):
                 repo_root / "poker44_ml" / "features_leader.py",
             ],
             defaults={
-                "model_name": metadata.get("name", "poker44-honest-behavioral"),
-                "model_version": str(metadata.get("version", DEFAULT_MODEL_VERSION)),
+                "model_name": model_name,
+                "model_version": model_version,
                 "framework": "lightgbm+scikit-learn-joblib",
                 "license": "MIT",
                 "artifact_sha256": self._sha256_file(self.model_path),
                 "notes": (
                     "127/08_submission local joblib ensemble. "
-                    f"Artifact version={metadata.get('version', '2')}; "
-                    f"strategy={metadata.get('strategy', 'unspecified')}; "
+                    f"Artifact version={model_version}; "
+                    f"strategy={metadata.get('strategy') or metadata.get('recipe', 'unspecified')}; "
                     f"Safety mode={SAFETY_MODE}; "
                     f"models={len(self.model.models)}; features={len(self.model.feature_names)}."
                 ),
@@ -83,6 +85,35 @@ class Miner(BaseMinerNeuron):
             )
 
         bt.logging.info(f"Axon created: {self.axon}")
+
+    @staticmethod
+    def _clean_text(value) -> str:
+        return str(value or "").strip()
+
+    @classmethod
+    def _model_name(cls, metadata: dict) -> str:
+        name = cls._clean_text(metadata.get("name"))
+        if name:
+            return name
+        env_name = cls._clean_text(os.getenv("POKER44_MODEL_NAME"))
+        if env_name:
+            return env_name
+        recipe = cls._clean_text(metadata.get("recipe")).upper()
+        if recipe == "A":
+            return "poker44-A-aggressive"
+        if recipe == "B":
+            return "poker44-B-robust"
+        return "poker44-honest-behavioral"
+
+    @classmethod
+    def _model_version(cls, metadata: dict) -> str:
+        version = cls._clean_text(metadata.get("version"))
+        if version:
+            return version
+        env_version = cls._clean_text(os.getenv("POKER44_MODEL_VERSION"))
+        if env_version:
+            return env_version
+        return cls._clean_text(metadata.get("built")) or DEFAULT_MODEL_VERSION
 
     def _resolve_model_path(self, repo_root: Path) -> Path:
         configured = str(getattr(self.config.miner, "model_path", "") or "").strip()
@@ -118,7 +149,7 @@ class Miner(BaseMinerNeuron):
 
         print(
             f"[MODEL] loaded 127 submission path={model_path} "
-            f"name={model.metadata.get('name', '')} version={model.metadata.get('version', '')} "
+            f"name={self._model_name(model.metadata)} version={self._model_version(model.metadata)} "
             f"models={len(model.models)} features={len(model.feature_names)} "
             f"safety={SAFETY_MODE}",
             flush=True,
