@@ -21,5 +21,5 @@ def chunk_features(chunk):
     for k, v in ours.items():                         # + only the honest signals
         if k.startswith(_HONEST_PREFIXES):
             f[k] = v
-    f.update(_creative_features(chunk))
+    f.update(_creative_features(chunk))               # + 창의 피처(cr_*)
     return f
