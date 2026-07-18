@@ -1,47 +1,43 @@
-# 풀이 A — 공격형 (uid 232) · 최종 v4 · 2026-07-17
+# Solution A Aggressive Variant (uid 232) - Final v2 - 2026-07-18
 
-## 전략
-**라이브 모양 우선 베팅.** 라이브 질의 = ~90배치 × **100핸드** (검증자 `max_hands_per_chunk=100`).
-A는 병합100 배치에 가중 1.3을 줘 라이브 모양에 최적화 + 반감기 3으로 그날 집중.
+## Strategy
 
-## 이번 판의 3대 수정 (전부 실측)
-| 수정 | 근거 |
+Live-shape priority. Current live queries are usually about 90 batches x 100 hands.
+Solution A emphasizes merged100 batches with weight 1.3 and recency half-life 3.0.
+
+## Configuration
+
+| Item | Value |
 |---|---|
-| ★inference 속도버그 — `chunk_features`가 피처이름(343)마다 재호출되던 것 | 90배치 질의 **496초 → 2.8초** (검증자 timeout 180초 → 이전엔 전 응답 폐기 = 0점) |
-| ★혼합모양 학습 — 원판(30~40핸드) + 병합100핸드 | 원판만 학습시 라이브모양 comp **0.78**, 혼합 학습시 **0.95 (+0.17)** |
-| 창의피처 31 포함 343 | 07-17 지배 판별축 1위가 창의피처 `cr_agg_autocorr`(0.97) |
+| Data | 2026-07-06 through 2026-07-18, mirrored payload view, original 1906 plus merged100 1560 for 3466 rows |
+| Main ensemble | LGBM x5 with leaves63, RF500, ExtraTrees500, HistGB500, LogReg |
+| Diversity members | Two LGBM models trained with autocorr, rand, and state axes excluded, 291 features, weight 0.7 |
+| Weights | recency half-life 3.0 x merged weight 1.3 |
+| Safety cap | top-K 10 percent, minimum 2, above 0.5 only |
+| Defenses | per-chunk try/except, NaN sanitation, deterministic fallback |
 
-## 검증 (2026-07-17)
-```
-순방향(≤07-16 학습 → 07-17 평가):  원판34 comp=0.9704 · 병합100 comp=0.9589
-속도: 90배치×100핸드 = 2.8초 (예산 180초, 여유 64배)
-안전성: 캡 K=9 정상 · 빈입력/1청크 OK · 점수범위 OK · in-sample 재현 1.0000
-```
-※ 순방향이 정직한 실력 추정. in-sample 1.0은 배선 확인용.
+## Verification
 
-## 구성
-| 항목 | 값 |
+```text
+Forward test: train through 2026-07-17, evaluate on 2026-07-18
+Original34: AP=0.9854 recall=0.9189 -> comp=0.9706
+Merged100:  AP=0.9958 recall=0.9667 -> comp=0.9885
+Speed: 90 batches x 100 hands = 3.1 seconds
+Cap: exactly 9/90 flagged, adversarial input checks passed, joblib 49.4 MB
+```
+
+## Key History
+
+| Change | Reason |
 |---|---|
-| 데이터 | 07-06~07-17 미러링(`prepare_hand_for_miner`), 원판 1758 + 병합100 1440 |
-| 앙상블 9모델 | LGBM×5(leaves63, est700) + RF500 + ExtraTrees500 + HistGB500 + LogReg |
-| 가중 | recency 반감기 **3.0** × 병합배치 **1.3** |
-| 안전캡 | top-K = max(2, floor(0.1n)) — AP/recall 불변, 몰수 방지 |
-| 매니페스트 | 안 보냄 (manifestPresent=True 3명 전원 0점 — 실측) |
+| Inference speed fix | Avoids recomputing features 343 times per chunk. |
+| Mixed-shape training | Original-only training was weaker on live-shape proxy data. |
+| Per-model feature subsets | Adds two diversity models for humanized bot patterns. |
 
-## 배포
+## Deploy
+
 ```bash
-python train.py --all        # 재현 학습 (약 10분, 44.5MB joblib)
-python verify.py             # 자가검증
-# VPS에서:
-POKER44_SAFETY_MODE=honest python miner.py --axon.port <PORT> ...
-# joblib 교체시 재시작 불필요 — miner가 60초마다 mtime 보고 자동 재로드
+pip install -r requirements.txt
+python train.py --all
+python verify.py
 ```
-
-## A vs B
-| | **A (이 폴더, uid232)** | B (uid152) |
-|---|---|---|
-| 반감기 | 3.0 (그날 집중) | 4.0 (실측 최적) |
-| 병합가중 | 1.3 (라이브 우선) | 1.0 (균등) |
-| 앙상블 | 9모델 고용량 | 7모델 보수 |
-| 07-17 순방향 | 0.9704 / 0.9589 | 0.9851 / 0.9591 |
-| 베팅 | 라이브 모양 적합 | 모양 불문 견고 |

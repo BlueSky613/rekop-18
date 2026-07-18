@@ -20,7 +20,7 @@ from poker44.validator.synapse import DetectionSynapse
 from poker44_ml.inference import Poker44Model, SAFETY_MODE
 
 
-DEFAULT_MODEL_VERSION = "127-submission"
+DEFAULT_MODEL_VERSION = "2"
 
 
 class Miner(BaseMinerNeuron):
@@ -103,7 +103,7 @@ class Miner(BaseMinerNeuron):
             return "poker44-A-aggressive"
         if recipe == "B":
             return "poker44-B-robust"
-        return "poker44-honest-behavioral"
+        return "poker44-A-aggressive"
 
     @classmethod
     def _model_version(cls, metadata: dict) -> str:

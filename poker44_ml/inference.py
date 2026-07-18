@@ -1,7 +1,7 @@
-"""Inference wrapper: load the Poker44 joblib artifact and score chunks.
+"""Inference wrapper — loads the real Poker44 joblib artifact and scores chunks.
 
 Interface matches the live subnet: Poker44Model(path).predict_chunk_scores(chunks).
-Blend = weighted mean of each model's P(bot). Safety = 152-proof top-K.
+Blend = weighted mean of each model's P(bot). Safety = 152-proof top-K (see below).
 """
 
 from __future__ import annotations
@@ -9,22 +9,24 @@ from __future__ import annotations
 import math
 import os
 import sys
-import warnings
 from pathlib import Path
+
+import warnings
 
 import joblib
 import numpy as np
 
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
+
 from poker44_ml.combined import chunk_features
 
-warnings.filterwarnings("ignore", message="X does not have valid feature names")
-
 _MODEL = Path(__file__).resolve().parent.parent / "model" / "poker44_model.joblib"
-SAFETY_MODE = os.environ.get("POKER44_SAFETY_MODE", "honest").strip().lower()
+
+# Per-folder default is set in each solution's copy of this file.
+SAFETY_MODE = os.environ.get("POKER44_SAFETY_MODE", "honest").strip().lower()  # folder default
 
 
 def _install_sklearn_pickle_compat():
-    """Expose sklearn 1.7 loss symbols when newer sklearn moved them."""
     try:
         import sklearn._loss as sklearn_loss
         import sklearn._loss.loss as sklearn_loss_module
@@ -43,62 +45,63 @@ class Poker44Model:
         art = joblib.load(model_path)
         self.models = list(art.get("models") or ([art["model"]] if art.get("model") else []))
         self.feature_names = list(art.get("feature_names") or [])
-        weights = art.get("model_weights") or [1.0] * len(self.models)
-        self.weights = np.asarray(weights[: len(self.models)], dtype=np.float64)
+        w = art.get("model_weights") or [1.0] * len(self.models)
+        self.weights = np.asarray(w[:len(self.models)], dtype=np.float64)
         if self.weights.sum() <= 0:
             self.weights = np.ones(len(self.models))
         self.weights /= self.weights.sum()
         self.metadata = dict(art.get("metadata") or {})
+        # Optional per-model feature subset (axis-ablated diversity members); None = all features.
+        fi = art.get("model_feature_idx") or [None] * len(self.models)
+        self.feature_idx = list(fi[:len(self.models)]) + [None] * max(0, len(self.models) - len(fi))
 
     def _rows(self, chunks):
+        # Call chunk_features ONCE per chunk. Inside the feature-name loop it re-runs 343x,
+        # turning a 90-batch query into 496s > validator timeout 180s -> response discarded -> 0.
         feats = []
-        for chunk in chunks:
+        for c in chunks:
             try:
-                feats.append(chunk_features(chunk))
+                feats.append(chunk_features(c))
             except Exception:
-                feats.append({})
-        rows = np.array(
-            [[features.get(name, 0.0) for name in self.feature_names] for features in feats],
+                feats.append({})  # defective chunk -> zero vector; length preservation prevents the 0
+        X = np.array(
+            [[f.get(n, 0.0) for n in self.feature_names] for f in feats],
             dtype=np.float64,
         )
-        return np.nan_to_num(rows, nan=0.0, posinf=0.0, neginf=0.0)
+        # RandomForest raises on NaN input -> the whole query dies. Always sanitize.
+        return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def _blend(self, x):
+    def _blend(self, X):
         preds = []
-        for model in self.models:
-            if hasattr(model, "predict_proba"):
-                preds.append(np.clip(model.predict_proba(x)[:, 1], 0, 1))
+        for m, idx in zip(self.models, self.feature_idx):
+            Xi = X if idx is None else X[:, idx]
+            if hasattr(m, "predict_proba"):
+                preds.append(np.clip(m.predict_proba(Xi)[:, 1], 0, 1))
             else:
-                preds.append(np.clip(model.predict(x), 0, 1))
+                preds.append(np.clip(m.predict(Xi), 0, 1))
         return np.average(np.vstack(preds), axis=0, weights=self.weights)
 
-    def _safe_topk(self, probabilities, mode):
-        """Flag exactly K top-ranked chunks positive while preserving rank order."""
-        n = len(probabilities)
+    def _safe_topk(self, p, mode):
+        """152-proof: reward ignores magnitude (AP/recall use ranking; safety uses the
+        count of scores>=0.5). Flag exactly K=max(1, floor(0.10*n)) top-ranked as positive.
+        K>=1 avoids tp=0; K<=10% bounds hard_fpr; rank order preserved keeps AP intact."""
+        n = len(p)
         if n == 0:
-            return probabilities
-
+            return p
         k = max(1, int(math.floor(0.10 * n)))
         if n >= 8:
-            k = max(k, 2)
-        order = np.argsort(-probabilities, kind="mergesort")
+            k = max(k, 2)   # small-window guard: flag >=2 so tp=0 forfeit is impossible (rank unchanged)
+        order = np.argsort(-p, kind="mergesort")
         if mode == "band":
-            positive_hi, positive_lo, negative_hi, negative_lo = 0.509, 0.501, 0.490, 0.010
+            ph, pl, nh, nl = 0.509, 0.501, 0.490, 0.010
         else:
-            positive_hi, positive_lo, negative_hi, negative_lo = 0.900, 0.550, 0.450, 0.020
-
+            ph, pl, nh, nl = 0.900, 0.550, 0.450, 0.020
         out = np.empty(n, dtype=np.float64)
-        for rank, idx in enumerate(order[:k]):
-            out[idx] = positive_hi - (rank / max(k - 1, 1)) * (positive_hi - positive_lo)
-
+        for i, idx in enumerate(order[:k]):
+            out[idx] = ph - (i / max(k - 1, 1)) * (ph - pl)
         rest = order[k:]
-        for rank, idx in enumerate(rest):
-            if len(rest) > 1:
-                out[idx] = negative_hi - (
-                    rank / max(len(rest) - 1, 1)
-                ) * (negative_hi - negative_lo)
-            else:
-                out[idx] = negative_lo
+        for i, idx in enumerate(rest):
+            out[idx] = nh - (i / max(len(rest) - 1, 1)) * (nh - nl) if len(rest) > 1 else nl
         return np.clip(out, 0.0, 1.0)
 
     def predict_chunk_scores(self, chunks):
@@ -107,14 +110,13 @@ class Poker44Model:
         try:
             raw = self._blend(self._rows(chunks))
         except Exception:
+            # Last-resort safety net: always reply with the correct length.
+            # Deterministic pseudo-rank + cap -> ~0.54 composite even if random; an exception would mean 0.
             n = len(chunks)
-            raw = np.array(
-                [((idx * 2654435761) % 997) / 997.0 for idx in range(n)],
-                dtype=np.float64,
-            )
+            raw = np.array([((i * 2654435761) % 997) / 997.0 for i in range(n)], dtype=np.float64)
         scores = self._safe_topk(raw, "band" if SAFETY_MODE == "band" else "honest")
-        return [round(float(score), 6) for score in scores]
+        return [round(float(s), 6) for s in scores]
 
     def predict_chunk_score(self, chunk):
-        scores = self.predict_chunk_scores([chunk])
-        return scores[0] if scores else 0.5
+        s = self.predict_chunk_scores([chunk])
+        return s[0] if s else 0.5

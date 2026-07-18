@@ -179,7 +179,7 @@ def add_miner_args(cls, parser: argparse.ArgumentParser) -> None:
         type=str,
         default=os.getenv(
             "POKER44_MODEL_PATH",
-            "models/poker44_start_model_2.joblib",
+            "submissions/2026-07-17_A/model/poker44_model.joblib",
         ),
         help="Path to a local Poker44 miner model artifact.",
     )

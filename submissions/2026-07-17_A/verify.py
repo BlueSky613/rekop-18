@@ -33,7 +33,7 @@ CHUNK_DIR = ROOT / "02_benchmark_data" / "chunks"
 
 
 def _load_mirror():
-    """서빙과 동일한 payload 변환 (학습과 반드시 동일하게 검증)."""
+    """Same payload transform as serving (verification must match training)."""
     import sys
     try:
         from poker44.validator.payload_view import prepare_hand_for_miner
@@ -45,7 +45,7 @@ def _load_mirror():
                 sys.path.insert(0, str(cand))
                 from poker44.validator.payload_view import prepare_hand_for_miner
                 return prepare_hand_for_miner
-        raise RuntimeError("prepare_hand_for_miner 없음")
+        raise RuntimeError("prepare_hand_for_miner not found")
 
 
 def recall_at_fpr(s, y, mf=0.05):
@@ -91,21 +91,25 @@ def main():
     import copy
     mirror = _load_mirror()
     m = Poker44Model()
-    F, models, w = m.feature_names, m.models, m.weights
+    F, models = m.feature_names, m.models
     feats, ys, ds = [], [], []
     for p in sorted(CHUNK_DIR.glob("*.json")):
-        b = json.loads(p.read_text()); d = b["release"]["sourceDate"]
+        if p.stem < "2026-07-06":   # current-generator era only (matches training; faster)
+            continue
+        b = json.loads(p.read_text(encoding="utf-8")); d = b["release"]["sourceDate"]
         for rec in b["chunks"]:
             for bag, y in zip(rec["chunks"], rec["groundTruth"]):
-                hands = [mirror(copy.deepcopy(h)) for h in bag]   # ★서빙 동일 변환
+                hands = [mirror(copy.deepcopy(h)) for h in bag]   # same transform as serving
                 feats.append(chunk_features(hands)); ys.append(int(y)); ds.append(d)
     X = np.array([[f.get(n, 0.0) for n in F] for f in feats], dtype=np.float64)
     Y = np.array(ys); D = np.array(ds)
-    P = np.average(np.vstack([mm.predict_proba(X)[:, 1] for mm in models]), axis=0, weights=w)
+    # Per-model feature subsets (model_feature_idx) - ablated members take 291 features only.
+    #   Feeding all 343 features to every model raises. Always go through _blend.
+    P = m._blend(X)
 
     dates = sorted(set(D.tolist())); td = set(dates[-3:])
     print("=" * 62)
-    print(f"joblib 제출 검증 | 기본 SAFETY_MODE={SAFETY_MODE} | 모델 {len(models)}개")
+    print(f"joblib submission check | default SAFETY_MODE={SAFETY_MODE} | {len(models)} models")
     print("=" * 62)
     for mode in ("honest", "band"):
         tem = np.array([d in td for d in D])
@@ -120,10 +124,11 @@ def main():
                 c = reward(topk(P[bi], mode), Y[bi])["composite"]; nb += 1; mins.append(c)
                 if c <= 0:
                     ff += 1
-        print(f"[{mode:>6}] 홀드아웃 comp={r['composite']:.4f} AP={r['ap']:.4f} "
+        print(f"[{mode:>6}] holdout comp={r['composite']:.4f} AP={r['ap']:.4f} "
               f"R@5%={r['recall']:.4f} safety={r['safety']:.2f} hfpr={r['hard_fpr']:.3f} | "
-              f"배치{nb} 몰수{ff} 최저{min(mins):.3f}")
-    print("\n라이브 1위=0.5511(연습기준, 직접비교 불가) | 152-몰수: 모든 배치 회피")
+              f"batches{nb} forfeits{ff} min{min(mins):.3f}")
+    print("\nNOTE: deployed model trains on all data, so figures above are in-sample "
+          "(wiring check). See daily forward tests for skill. 0 forfeits = safe to deploy")
 
 
 if __name__ == "__main__":
