@@ -3,10 +3,19 @@
 import hashlib
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Tuple
+
+# `python neurons/miner.py` puts `neurons/` first on sys.path. Force this
+# repository root ahead of old editable installs or a stale PYTHONPATH.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+repo_root_text = str(REPO_ROOT)
+if repo_root_text in sys.path:
+    sys.path.remove(repo_root_text)
+sys.path.insert(0, repo_root_text)
 
 import bittensor as bt
 
@@ -17,6 +26,7 @@ from poker44.utils.model_manifest import (
     manifest_digest,
 )
 from poker44.validator.synapse import DetectionSynapse
+import poker44_ml.inference as poker44_inference
 from poker44_ml.inference import Poker44Model, SAFETY_MODE
 
 
@@ -31,7 +41,11 @@ class Miner(BaseMinerNeuron):
         print("[STARTUP] Poker44 127-submission miner started", flush=True)
         bt.logging.info("Poker44 127-submission miner started")
 
-        repo_root = Path(__file__).resolve().parents[1]
+        repo_root = REPO_ROOT
+        print(
+            f"[MODEL] inference module path={Path(poker44_inference.__file__).resolve()}",
+            flush=True,
+        )
         self.model_path = self._resolve_model_path(repo_root)
         self.request_log_path = self._resolve_request_log_path(repo_root)
         self.model = self._load_submission_model(self.model_path)
