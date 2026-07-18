@@ -22,6 +22,7 @@ output.png
 .vscode/*
 flightplans/*
 model/*
+!model/poker44_model.joblib
 
 models/*
 runs/*
